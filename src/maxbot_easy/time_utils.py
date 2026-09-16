@@ -2,6 +2,7 @@ import datetime
 import threading
 import time
 from collections.abc import Callable
+from typing import Any
 
 
 def now() -> datetime.datetime:
@@ -10,14 +11,14 @@ def now() -> datetime.datetime:
 def sleep(seconds: float) -> None:
     time.sleep(seconds)
 
-def later(seconds: float, callback: Callable[[], None]) -> None:
-    def delayed_call():
+def later(seconds: float, callback: Callable[..., Any]) -> None:
+    def delayed_call() -> None:
         time.sleep(seconds)
         callback()
     threading.Thread(target=delayed_call).start()
 
-def every(seconds: float, callback: Callable[[], None]) -> None:
-    def loop():
+def every(seconds: float, callback: Callable[..., Any]) -> None:
+    def loop() -> None:
         while True:
             time.sleep(seconds)
             callback()

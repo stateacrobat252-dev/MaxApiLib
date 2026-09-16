@@ -1,5 +1,11 @@
 import pytest
-from src.maxbot_easy.exceptions import MaxBotEasyError, MaxBotEasyAPIError, MaxBotEasyNetworkError
+
+from maxbot_easy.exceptions import (
+    MaxBotEasyAPIError,
+    MaxBotEasyError,
+    MaxBotEasyNetworkError,
+)
+
 
 def test_max_bot_easy_error():
     with pytest.raises(MaxBotEasyError) as excinfo:

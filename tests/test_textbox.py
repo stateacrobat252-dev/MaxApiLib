@@ -1,5 +1,5 @@
-import pytest
-from src.maxbot_easy.types import Button, TextBox
+from maxbot_easy.types import Button, TextBox
+
 
 def test_textbox_init():
     tb = TextBox("Привет")
@@ -27,7 +27,31 @@ def test_textbox_button():
     assert tb.rows[0][0].text == "Кнопка"
     assert tb.rows[0][0].payload == "payload"
 
-def test_textbox_to_attachments():
+def test_textbox_to_attachments_empty():
     tb = TextBox("Текст")
     assert tb.to_attachments() is None
 
+def test_textbox_to_attachments_content():
+    tb = TextBox("Меню")
+    tb.add(Button.callback("Click", "pay_1"))
+    tb.add(Button.link("Link", "https://google.com"))
+    
+    attachments = tb.to_attachments()
+    assert attachments is not None
+    assert len(attachments) == 1
+    keyboard = attachments[0]["inline_keyboard"]
+    assert len(keyboard) == 1
+    row = keyboard[0]
+    assert len(row) == 2
+    assert row[0]["text"] == "Click"
+    assert row[0]["callback_data"] == "pay_1"
+    assert row[1]["text"] == "Link"
+    assert row[1]["url"] == "https://google.com"
+
+def test_textbox_add_overflow():
+    tb = TextBox("Меню")
+    for i in range(6):
+        tb.add(Button.callback(f"B{i}", f"p{i}"))
+    assert len(tb.rows) == 2
+    assert len(tb.rows[0]) == 5
+    assert len(tb.rows[1]) == 1

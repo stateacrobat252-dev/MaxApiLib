@@ -24,7 +24,10 @@ class Button:
     @classmethod
     def link(cls, text: str, url: str) -> 'Button':
         if not (url.startswith("http://") or url.startswith("https://")):
-            raise ValueError(f"Некорректный URL: {url!r}. Должен начинаться с http:// или https://")
+            raise ValueError(
+                f"Некорректный URL: {url!r}. "
+                "Должен начинаться с http:// или https://"
+            )
         return cls(text=text, url=url)
 
     @classmethod
@@ -62,11 +65,14 @@ class TextBox:
     def add(self, button: Button) -> 'TextBox':
         if not self.rows:
             self.rows.append([button])
-        else:
-            for row in self.rows:
-                if len(row) < 5:
-                    row.append(button)
-                    break
+            return self
+        
+        for row in self.rows:
+            if len(row) < 5:
+                row.append(button)
+                return self
+        
+        self.rows.append([button])
         return self
 
     def button(self, text: str, payload: str) -> 'TextBox':
@@ -74,5 +80,20 @@ class TextBox:
         return self.add(btn)
 
     def to_attachments(self) -> list[dict[str, Any]] | None:
-        """Превращает TextBox в формат вложений (attachments)."""
-        return None
+        """Превращает TextBox в формат данных для отправки сообщения."""
+        if not self.rows:
+            return None
+
+        keyboard = []
+        for row in self.rows:
+            row_buttons = []
+            for btn in row:
+                btn_dict = btn.to_dict()
+                # В MAX API для кнопок callback используется callback_data
+                if btn.payload:
+                    btn_dict["callback_data"] = btn.payload
+                    btn_dict.pop("payload", None)
+                row_buttons.append(btn_dict)
+            keyboard.append(row_buttons)
+
+        return [{"inline_keyboard": keyboard}]

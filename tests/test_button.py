@@ -1,5 +1,7 @@
 import pytest
-from src.maxbot_easy.types import Button
+
+from maxbot_easy.types import Button
+
 
 def test_button_init():
     btn = Button('Test', payload='p1')
@@ -17,7 +19,7 @@ def test_button_link():
     assert btn.url == 'https://google.com'
 
 def test_button_link_invalid():
-    with pytest.raises(ValueError, match='Ссылка должна начинаться с http:// или https://'):
+    with pytest.raises(ValueError, match='Должен начинаться с http:// или https://'):
         Button.link('Link', 'invalid_url')
 
 def test_button_contact():
@@ -37,4 +39,11 @@ def test_button_chat():
 def test_button_to_dict():
     btn = Button.callback('Btn', 'Pay')
     d = btn.to_dict()
-    assert d == {'text': 'Btn', 'payload': 'Pay', 'url': None, 'title': None, 'description': None}
+    expected_dict = {
+        'text': 'Btn',
+        'payload': 'Pay',
+        'url': None,
+        'title': None,
+        'description': None,
+    }
+    assert d == expected_dict
