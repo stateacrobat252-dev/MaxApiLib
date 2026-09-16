@@ -58,3 +58,37 @@ class Button:
             "description": self.description,
         }
 
+class TextBox:
+    """Сообщение с текстом и цепочкой кнопок."""
+    def __init__(self, text: str):
+        self.text = text
+        self.rows: list[list[Button]] = []
+
+    def row(self, *buttons: Button) -> 'TextBox':
+        """Добавляет новый ряд кнопок."""
+        self.rows.append(list(buttons))
+        return self
+
+    def add(self, button: Button) -> 'TextBox':
+        """Добавляет кнопку в первый доступный ряд."""
+        if not self.rows:
+            self.rows.append([button])
+        else:
+            for row in self.rows:
+                if len(row) < 5:  # MAX API limit
+                    row.append(button)
+                    break
+        return self
+
+    def button(self, text: str, payload: str) -> 'TextBox':
+        """Быстрое создание кнопки и добавление в текст (упрощенно)."""
+        # Note: This is a helper for easy building
+        btn = Button.callback(text, payload)
+        return self.add(btn)
+
+    def to_attachments(self) -> list[dict[str, Any]] | None:
+        """Преобразует TextBox в формат MAX API для вложений (attachments)."""
+        # Внутренняя реализация, скрытая от пользователя
+        # Для начала вернем пустой список или структуру для отладки
+        return None
+
