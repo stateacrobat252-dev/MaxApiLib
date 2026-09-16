@@ -1,8 +1,9 @@
-from typing import Any, Optional
+from typing import Any
+
 
 class MaxBotEasyError(Exception):
     """Базовое исключение для maxbot-easy."""
-    def __init__(self, message: str, details: Optional[dict[str, Any]] = None):
+    def __init__(self, message: str, details: dict[str, Any] | None = None):
         super().__init__(message)
         self.details = details
 

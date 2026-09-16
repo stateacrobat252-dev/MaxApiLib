@@ -1,5 +1,5 @@
 from typing import Any
-from .exceptions import MaxBotEasyError
+
 
 class Button:
     """Объект кнопки взаимодействия с пользователем."""
