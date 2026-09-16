@@ -1,38 +1,32 @@
-import logging
-import sys
-from pathlib import Path
 from typing import Any
+
+from maxapi.bot import Bot as MaxBot
 
 from .exceptions import MaxBotEasyAPIError
 
-# Добавляем путь к локальной библиотеке maxapi, если он не найден
-if not Path("maxapi").exists():
-    sys.path.append(str(Path().resolve()))
-
-try:
-    from maxapi.maxapi.bot import Bot as MaxBot
-except ImportError:
-    logger = logging.getLogger("maxbot_easy.client")
-    logger.error("Не удалось импортировать maxapi. Убедитесь, что библиотека доступна.")
-    raise
-
-logger = logging.getLogger("maxbot_easy.client")
 
 class MaxBotClient:
     """Обертка над стандартным maxapi.Bot."""
     def __init__(self, token: str):
         self.bot = MaxBot(token)
 
-    async def send_message(self, content: Any) -> None:
+    async def send_message(self, content: Any, attachments: list[dict[str, Any]] | None = None) -> None:
         try:
-            await self.bot.send_message(content)
+            await self.bot.send_message(content, attachments=attachments)
         except Exception as e:
-            logger.error(f"Ошибка при отправке: {e}")
-            raise MaxBotEasyAPIError(f"Ошибка API: {e}") from e
+            raise MaxBotEasyAPIError(f"Ошибка API при отправке сообщения: {e}") from e
 
-    async def reply(self, message: Any, content: Any) -> None:
+    async def reply(self, message: Any, content: Any, attachments: list[dict[str, Any]] | None = None) -> None:
         try:
-            await self.bot.reply(message, content)
+            if hasattr(self.bot, 'reply'):
+                await self.bot.reply(message, content, attachments=attachments)
+            else:
+                await self.bot.send_message(content, attachments=attachments)
         except Exception as e:
-            logger.error(f"Ошибка при ответе: {e}")
-            raise MaxBotEasyAPIError(f"Ошибка API: {e}") from e
+            raise MaxBotEasyAPIError(f"Ошибка API при ответе: {e}") from e
+
+    async def get_updates(self) -> list[Any]:
+        try:
+            return await self.bot.get_updates()
+        except Exception as e:
+            raise MaxBotEasyAPIError(f"Ошибка API при получении обновлений: {e}") from e
