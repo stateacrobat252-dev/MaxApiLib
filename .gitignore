@@ -1,3 +1,45 @@
-(docs/HOW_TO_CREATE_BOT.md) is a documentation file and does not need to be ignored.
+```
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.Python
+env/
+venv/
+.venv/
+.env
+.env.local
+.env.*
 
-Output: (nothing)
+# Build artifacts
+build/
+dist/
+*.egg
+*.whl
+*.so
+*.dylib
+*.dll
+
+# Testing
+.coverage
+coverage/
+htmlcov/
+.noserc
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+```
