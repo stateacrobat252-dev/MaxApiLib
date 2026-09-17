@@ -26,6 +26,9 @@ USER: dict[str, Any] = {
 
 CHAT_ID = 100
 
+#: Токен-заглушка: настоящий в тестах не нужен, сеть подменена.
+TOKEN = "x" * 40
+
 CHAT: dict[str, Any] = {
     "chat_id": CHAT_ID,
     "type": "dialog",
@@ -106,9 +109,11 @@ class FakeTransport:
         self.messages: list[dict[str, Any]] = []
         self.answers: list[dict[str, Any]] = []
         self.updates: list[dict[str, Any]] = []
+        self.subscriptions: list[dict[str, Any]] = []
         self.unauthorized = False
         self.fail_updates = False
         self.send_error: Exception | None = None
+        self.subscribe_error: Exception | None = None
         self.message_delay = 0.0
 
     def push_updates(self, *events: dict[str, Any]) -> None:
@@ -176,7 +181,11 @@ class FakeTransport:
             return {"success": True, "message": None}
 
         if path.endswith("/subscriptions"):
-            return {"subscriptions": []}
+            if self.subscribe_error is not None and method == "POST":
+                raise self.subscribe_error
+            if method == "GET":
+                return {"subscriptions": list(self.subscriptions)}
+            return {"success": True, "message": None}
 
         message = f"Заглушка не знает про запрос {record}"
         raise AssertionError(message)

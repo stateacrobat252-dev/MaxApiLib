@@ -67,6 +67,10 @@ export MAX_BOT_TOKEN=ваш_токен   # Linux/macOS
 | Ответ на нажатие кнопки | `callback.answer("текст")`, `callback.answer(notification="...")` |
 | Таймеры | `later(5, func)`, `every(60, func)` |
 | Отправка по расписанию и из потока | `bot.send("текст", chat_id=42)` |
+| Диалоги-анкеты (состояния) | `bot.set_state(message, "имя")` + `@bot.on_state("имя")` |
+| Память о пользователе | `bot.set_data(message, name="Иван")`, `bot.get_data(message)` |
+| Вебхуки (для продакшена) | `bot.run_webhook("https://бот.example.com/hook")` |
+| Логи и счётчики | `print(bot.stats)`, `Bot(log_file="bot.log")`, `GET /health`, `GET /stats` |
 
 ## Обработчики
 
@@ -147,6 +151,138 @@ humanize_delay(120)        # "2m"
 Таймеры работают в фоновых демон-потоках: они не мешают программе
 завершиться и не блокируют бота.
 
+## Состояния (диалоги-анкеты)
+
+Библиотека запоминает для каждого пользователя **состояние** и **данные**:
+
+```python
+@bot.on_command("start")
+def start(message):
+    bot.set_state(message, "waiting_name")        # вошли в состояние
+    message.reply("Как вас зовут?")
+
+@bot.on_state("waiting_name")                     # сработает только в нём
+def get_name(message):
+    bot.set_data(message, name=message.text)      # сохранили ответ
+    bot.reset_state(message)                      # вышли
+    message.reply(f"Привет, {bot.get_data(message, 'name')}!")
+```
+
+Полезные методы (работают и с событием, и по ID):
+
+| Метод | Что делает |
+| --- | --- |
+| `bot.set_state(message, "имя")` | запомнить состояние (`None` — сбросить) |
+| `bot.get_state(message)` | текущее состояние или `None` |
+| `bot.set_data(message, name="Иван")` | сохранить данные пользователя |
+| `bot.get_data(message)` / `bot.get_data(message, "name")` | все данные или одно значение |
+| `bot.reset_state(message)` | забыть состояние и данные |
+| `bot.set_state("имя", chat_id=42, user_id=7)` | то же самое вне обработчика |
+
+Любой обработчик можно ограничить состоянием:
+
+```python
+@bot.on_button("next", state="in_menu")   # кнопка работает только в меню
+@bot.on_text(r"да|нет", state="confirm")  # и текст
+```
+
+Состояния и данные хранятся в памяти процесса (теряются при перезапуске).
+Для продакшена можно взять Redis:
+
+```python
+from maxapi.context import RedisContext
+
+bot = Bot(storage=RedisContext, storage_options={"url": "redis://localhost:6379"})
+```
+
+## Вебхуки
+
+Вебхук — способ, который MAX рекомендует для продакшена: события приходят
+сразу на ваш HTTPS-адрес, а не выпрашиваются опросом.
+
+```python
+bot = Bot()
+
+...обработчики...
+
+if __name__ == "__main__":
+    bot.run_webhook("https://bot.example.com/hook", port=8080)
+```
+
+Что делает библиотека:
+
+* поднимает HTTP-сервер (порт по умолчанию 8080) на указанном пути;
+* сама подписывает бота на вебхук (`POST /subscriptions`);
+* придумывает `secret`, если вы его не указали, и проверяет заголовок
+  `X-Max-Bot-Api-Secret` в каждом запросе (чужие запросы получают 403);
+* отдаёт адреса для мониторинга: `GET /health` и `GET /stats`.
+
+Важно: адрес должен быть доступен из интернета по HTTPS. Для локальной
+проверки используйте `subscribe=False` — тогда сервер поднимется, но
+подписка не оформляется.
+
+Параметры: `host`, `port` (`0` — любой свободный), `secret`, `subscribe`,
+`blocking` (как у `run`).
+
+Если бот раньше работал через вебхук, а теперь должен отвечать в поллинге,
+удалите подписку:
+
+```python
+print(bot.webhooks())     # какие адреса подписаны
+bot.delete_webhook()      # убрать подписки, вернуть поллинг
+```
+
+## Логи и мониторинг
+
+Логи включены по умолчанию: видно каждое событие и каждую отправку.
+
+```
+2026-09-17 12:00:01 INFO     maxapilib: ← сообщение от 42 в чат 100: '/start'
+2026-09-17 12:00:01 INFO     maxapilib: → ответ в чат 100: 'Привет!'
+```
+
+Настроить можно при создании бота или отдельно:
+
+```python
+bot = Bot(log_level="DEBUG", log_file="bot.log")   # подробно и в файл
+
+import maxapilib
+maxapilib.enable_logging("WARNING")                # только предупреждения
+```
+
+Счётчики для мониторинга:
+
+```python
+print(bot.stats)
+# статус: работает | события: 12 | сообщения: 9 | кнопки: 3 |
+# отправлено: 11 | ответов на кнопки: 3 | ошибки: 0 | работает: 2m
+
+bot.stats.as_dict()   # то же словарём — удобно отдавать в систему мониторинга
+```
+
+В режиме вебхука счётчики и здоровье доступны по HTTP:
+
+```bash
+curl http://localhost:8080/health   # {'status': 'ok', 'bot': {...}}
+curl http://localhost:8080/stats    # счётчики в JSON
+```
+
+Ошибки в обработчиках не роняют бота: они попадают в лог, в счётчики
+(`bot.stats.errors`) и в обработчики `on_error`:
+
+```python
+bot = Bot(admin_id=ВАШ_USER_ID)   # сообщение об ошибке придёт вам в MAX
+
+@bot.on_error()
+def any_error(error):
+    print("Упс:", error.text)      # "ValueError: что-то пошло не так"
+    print(error.traceback)         # полный стек вызовов
+
+@bot.on_error(ValueError)          # только определённые ошибки
+def only_value(error):
+    ...
+```
+
 ## Ошибки
 
 Все исключения наследуются от `MaxApiLibError`, поэтому достаточно одного
@@ -169,32 +305,27 @@ except MaxApiLibError as exc:
 | `MaxApiLibNetworkError` | нет связи с API MAX |
 | `MaxApiLibTimeoutError` | ответа нет дольше `call_timeout` |
 
-## Отладка
+## Если бот не отвечает
 
-```python
-import maxapilib
-
-maxapilib.enable_logging()          # INFO
-maxapilib.enable_logging("DEBUG")   # подробно
-
-bot = Bot(log_level="DEBUG")        # то же самое при создании бота
-```
-
-Если бот не отвечает, проверьте:
-
-* токен (`MaxApiLibAuthError` при запуске — неверный токен);
-* нет ли у бота установленного вебхука: при вебхуке MAX не отдаёт события
-  через long polling, и библиотека предупредит об этом в логах;
+* проверьте токен: при неверном токене бот падает с `MaxApiLibAuthError`;
+* включите логи (`enable_logging("DEBUG")`) и посмотрите, приходит ли
+  событие: строка `← сообщение от ...` означает, что событие дошло, значит
+  дело в обработчике;
+* нет ли установленного вебхука: при вебхуке MAX не отдаёт события через
+  long polling. Посмотрите `print(bot.webhooks())` и при необходимости
+  вызовите `bot.delete_webhook()`;
 * лимиты API MAX: не более 2 сообщений и 2 ответов на callback в секунду
   на один чат — при массовой рассылке делайте паузы;
 * long polling подходит для разработки; для продакшена MAX рекомендует
-  вебхуки.
+  вебхуки (см. раздел выше).
 
 ## Примеры
 
 * [`examples/echo_bot.py`](examples/echo_bot.py) — эхо-бот: команды, кнопки, регулярные выражения.
 * [`examples/keyboard_bot.py`](examples/keyboard_bot.py) — все типы кнопок MAX.
+* [`examples/form_bot.py`](examples/form_bot.py) — анкета на состояниях (FSM) и данных пользователя.
 * [`examples/timer_bot.py`](examples/timer_bot.py) — таймеры `later` и `every`.
+* [`examples/webhook_bot.py`](examples/webhook_bot.py) — бот на вебхуке с логами и мониторингом.
 
 ## Переход с maxbot-easy 0.1
 

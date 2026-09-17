@@ -37,12 +37,6 @@ from .helpers import (
 TOKEN = "x" * 40
 
 
-@pytest.fixture
-def bot(transport: FakeTransport) -> Bot:
-    """Бот с подменённым HTTP-слоем (сеть не нужна)."""
-    return Bot(TOKEN)
-
-
 def test_command_handler_replies(transport: FakeTransport, bot: Bot) -> None:
     seen: list[tuple[str | None, list[str], bool]] = []
 
@@ -296,12 +290,13 @@ def test_run_after_stop_works(transport: FakeTransport, bot: Bot) -> None:
         bot.stop()
 
 
-def test_send_after_stop_raises(transport: FakeTransport, bot: Bot) -> None:
+def test_send_after_stop_works(transport: FakeTransport, bot: Bot) -> None:
     bot.run(blocking=False)
     bot.stop()
 
-    with pytest.raises(MaxApiLibError, match="Бот не запущен"):
-        bot.send("Привет", chat_id=CHAT_ID)
+    # Разовое уведомление работает и без запущенного бота.
+    bot.send("Привет", chat_id=CHAT_ID)
+    assert transport.messages[-1]["json"]["text"] == "Привет"
 
 
 def test_invalid_token_stops_run(transport: FakeTransport) -> None:

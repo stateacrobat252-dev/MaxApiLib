@@ -31,12 +31,16 @@ import inspect
 import logging
 import os
 import threading
+import traceback
 from collections.abc import Callable, Coroutine, Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from maxapi import Bot as MaxApiBot
 from maxapi import Dispatcher
+from maxapi.context import MemoryContext
 from maxapi.enums.parse_mode import TextFormat
+from maxapi.filters.state import StateFilter
 from maxapi.types.attachments.attachment import Attachment
 from maxapi.types.message import Message as MaxApiMessage
 
@@ -44,8 +48,11 @@ from .client import MaxApiClient, is_api_error, translate_error
 from .exceptions import MaxApiLibAuthError, MaxApiLibError, MaxApiLibTimeoutError
 from .filters import CallbackPayload, CommandFilter, TextPattern
 from .logs import enable_logging
+from .monitoring import Monitor, Stats
+from .states import StateManager, target_ids
 from .types import (
     Callback,
+    Error,
     Message,
     Started,
     TextBox,
@@ -53,8 +60,15 @@ from .types import (
     message_from_update,
     started_from_update,
 )
+from .webhook import (
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    WebhookServer,
+    generate_secret,
+)
 
 if TYPE_CHECKING:
+    from maxapi.context import BaseContext
     from maxapi.dispatcher import Event
 
 logger = logging.getLogger("maxapilib")
@@ -64,6 +78,12 @@ TOKEN_ENV_VAR = "MAX_BOT_TOKEN"
 
 #: Сколько секунд синхронный вызов ждёт ответа MAX API.
 DEFAULT_CALL_TIMEOUT = 30.0
+
+#: Уровень логирования по умолчанию: видно события и отправки.
+DEFAULT_LOG_LEVEL = "INFO"
+
+#: Максимальная длина текста сообщения в MAX.
+MAX_TEXT_LENGTH = 4000
 
 F = TypeVar("F", bound=Callable[..., Any])
 T = TypeVar("T")
@@ -155,14 +175,21 @@ class Bot:
     * :meth:`on_button` — нажатие кнопки с нужным ``payload``;
     * :meth:`on_callback` — любое нажатие inline-кнопки;
     * :meth:`on_message` — любое входящее сообщение (запасной вариант);
-    * :meth:`on_started` — пользователь нажал «Начать».
+    * :meth:`on_started` — пользователь нажал «Начать»;
+    * :meth:`on_state` — сообщение в нужном состоянии (`FSM` <состояния>`__);
+    * :meth:`on_error` — ошибка в любом обработчике.
 
     Обработчики вызываются по порядку регистрации: срабатывает первый
-    подходящий.
+    подходящий. У любого обработчика можно указать ``state="имя"``, чтобы
+    он работал только в этом состоянии.
+
+    Запуск: :meth:`run` (long polling) или :meth:`run_webhook` (вебхук).
 
     Attributes:
         maxapi: Исходный объект ``maxapi.Bot`` (доступ ко всем методам API).
         dispatcher: Диспетчер ``maxapi`` (фильтры, middleware, роутеры).
+        stats: Счётчики работы бота (:class:`maxapilib.Stats`),
+            в том числе для мониторинга.
     """
 
     def __init__(
@@ -170,10 +197,14 @@ class Bot:
         token: str | None = None,
         *,
         format: str | TextFormat | None = None,
-        log_level: int | str | None = None,
+        log_level: int | str | None = DEFAULT_LOG_LEVEL,
+        log_file: str | Path | None = None,
+        admin_id: int | None = None,
         call_timeout: float = DEFAULT_CALL_TIMEOUT,
         skip_updates: bool = False,
         auto_check_subscriptions: bool = True,
+        storage: type[BaseContext] | None = None,
+        storage_options: dict[str, Any] | None = None,
     ) -> None:
         """Создать бота.
 
@@ -181,32 +212,58 @@ class Bot:
             token: Токен бота. Если ``None``, берётся из переменной
                 окружения ``MAX_BOT_TOKEN``.
             format: Формат текста по умолчанию: ``"markdown"`` или ``"html"``.
-            log_level: Если задан — сразу включает логирование
-                (см. :func:`maxapilib.enable_logging`).
+            log_level: Уровень логирования (по умолчанию ``"INFO"``):
+                видно каждое событие и каждую отправку.
+                ``None`` — не настраивать логи вообще.
+            log_file: Файл, куда дополнительно писать логи.
+            admin_id: ID пользователя (ваш), которому бот пришлёт
+                сообщение об ошибке в обработчике.
             call_timeout: Сколько секунд ждать ответа MAX API
                 в синхронных вызовах.
             skip_updates: Не обрабатывать события, случившиеся до запуска
                 бота (полезно, чтобы не отвечать на старые сообщения).
             auto_check_subscriptions: Проверять при запуске, нет ли у бота
                 вебхука (вебхук отключает поллинг).
+            storage: Где хранить состояния и данные
+                (по умолчанию — в оперативной памяти).
+            storage_options: Параметры хранилища, например
+                ``{"url": "redis://localhost"}`` для Redis.
 
         Raises:
             MaxApiLibAuthError: Если токен не найден.
-            ValueError: Если токен или формат указаны неверно.
+            ValueError: Если токен, формат или уровень логов указаны неверно.
         """
         _check_token(token)
 
-        if log_level is not None:
-            enable_logging(log_level)
+        if log_level is not None or log_file is not None:
+            enable_logging(
+                log_level if log_level is not None else DEFAULT_LOG_LEVEL,
+                file=log_file,
+            )
 
         self.maxapi = MaxApiBot(
             token=token,
             format=as_format(format),
             auto_check_subscriptions=auto_check_subscriptions,
         )
-        self.dispatcher = Dispatcher(router_id="maxapilib")
+        self.dispatcher = Dispatcher(
+            router_id="maxapilib",
+            storage=storage or MemoryContext,
+            **(storage_options or {}),
+        )
+
+        #: Счётчики работы бота: print(bot.stats) или bot.stats.as_dict().
+        self.stats = Stats()
+        # Каждое событие (даже без подходящего обработчика) попадает
+        # в счётчики и в лог.
+        self.dispatcher.register_outer_middleware(Monitor(self.stats))
 
         self._client = MaxApiClient(self.maxapi)
+        self._states = StateManager(self.dispatcher.fsm)
+        self._admin_id = admin_id
+        self._error_handlers: list[
+            tuple[tuple[type[BaseException], ...], Callable[..., Any]]
+        ] = []
         self._context: contextvars.ContextVar[EventView | None] = (
             contextvars.ContextVar("maxapilib_event", default=None)
         )
@@ -217,12 +274,24 @@ class Bot:
         self._stop_requested = threading.Event()
         self._thread: threading.Thread | None = None
         self._fatal: BaseException | None = None
+        self._webhook_url: str | None = None
+        self._webhook_secret: str | None = None
+        self._webhook_host = DEFAULT_HOST
+        self._webhook_requested_port = DEFAULT_PORT
+        self._webhook_port: int | None = None
+        self._webhook_subscribe = True
+        self._webhook_server: WebhookServer | None = None
 
     @property
     def is_running(self) -> bool:
-        """``True``, если поллинг бота работает."""
+        """``True``, если бот запущен (поллинг или вебхук)."""
         thread = self._thread
         return thread is not None and thread.is_alive()
+
+    @property
+    def webhook_port(self) -> int | None:
+        """Порт сервера вебхука (``None``, если бот работает на поллинге)."""
+        return self._webhook_port
 
     @property
     def current(self) -> EventView | None:
@@ -237,12 +306,15 @@ class Bot:
     # Регистрация обработчиков
     # ------------------------------------------------------------------
 
-    def on_command(self, *commands: str, prefix: str = "/") -> Callable[[F], F]:
+    def on_command(
+        self, *commands: str, prefix: str = "/", state: str | None = None
+    ) -> Callable[[F], F]:
         """Декоратор: обработка команд вида ``/start``.
 
         Args:
             *commands: Команды без префикса: ``"start"``, ``"help"``.
             prefix: Префикс команды (по умолчанию ``"/"``).
+            state: Сработать только в этом состоянии (см. :meth:`on_state`).
 
         Example::
 
@@ -254,13 +326,17 @@ class Bot:
             self.dispatcher.message_created,
             CommandFilter(commands, prefix=prefix),
             self._make_message_handler,
+            state=state,
         )
 
-    def on_text(self, pattern: str) -> Callable[[F], F]:
+    def on_text(
+        self, pattern: str, *, state: str | None = None
+    ) -> Callable[[F], F]:
         """Декоратор: обработка сообщений, подходящих под регулярное выражение.
 
         Args:
             pattern: Регулярное выражение, которое ищется в тексте.
+            state: Сработать только в этом состоянии.
 
         Example::
 
@@ -272,10 +348,17 @@ class Bot:
             self.dispatcher.message_created,
             TextPattern(pattern),
             self._make_message_handler,
+            state=state,
         )
 
-    def on_button(self, payload: str) -> Callable[[F], F]:
+    def on_button(
+        self, payload: str, *, state: str | None = None
+    ) -> Callable[[F], F]:
         """Декоратор: обработка нажатия кнопки с указанным ``payload``.
+
+        Args:
+            payload: Данные кнопки.
+            state: Сработать только в этом состоянии.
 
         Example::
 
@@ -287,21 +370,57 @@ class Bot:
             self.dispatcher.message_callback,
             CallbackPayload(payload),
             self._make_callback_handler,
+            state=state,
         )
 
-    def on_callback(self) -> Callable[[F], F]:
+    def on_callback(self, *, state: str | None = None) -> Callable[[F], F]:
         """Декоратор: обработка любого нажатия inline-кнопки."""
         return self._register(
-            self.dispatcher.message_callback, None, self._make_callback_handler
+            self.dispatcher.message_callback,
+            None,
+            self._make_callback_handler,
+            state=state,
         )
 
-    def on_message(self) -> Callable[[F], F]:
+    def on_message(self, *, state: str | None = None) -> Callable[[F], F]:
         """Декоратор: обработка любого входящего сообщения.
 
         Ставьте его последним: срабатывает первый подходящий обработчик.
+
+        Args:
+            state: Сработать только в этом состоянии.
         """
         return self._register(
-            self.dispatcher.message_created, None, self._make_message_handler
+            self.dispatcher.message_created,
+            None,
+            self._make_message_handler,
+            state=state,
+        )
+
+    def on_state(self, *states: str) -> Callable[[F], F]:
+        """Декоратор: сообщение, пришедшее в одном из этих состояний.
+
+        Самый простой способ сделать диалог-анкету:
+
+        Example::
+
+            @bot.on_command("start")
+            def start(message):
+                bot.set_state(message, "waiting_name")
+                message.reply("Как вас зовут?")
+
+            @bot.on_state("waiting_name")
+            def get_name(message):
+                bot.reset_state(message)
+                message.reply(f"Привет, {message.text}!")
+
+        Args:
+            *states: Имена состояний. ``"*"`` — любое состояние.
+        """
+        return self._register(
+            self.dispatcher.message_created,
+            StateFilter(*states),
+            self._make_message_handler,
         )
 
     def on_started(self) -> Callable[[F], F]:
@@ -310,30 +429,57 @@ class Bot:
             self.dispatcher.bot_started, None, self._make_started_handler
         )
 
+    def on_error(
+        self, *exceptions: type[BaseException]
+    ) -> Callable[[F], F]:
+        """Декоратор: что делать, если в обработчике случилась ошибка.
+
+        Без него ошибка попадает в лог и в счётчики, а бот продолжает
+        работать. Аргументами можно ограничить типы ошибок:
+
+        Example::
+
+            @bot.on_error()
+            def any_error(error):
+                print("Упс:", error.text)
+
+            @bot.on_error(ValueError)
+            def only_value_error(error):
+                print("Плохое значение:", error.text)
+        """
+
+        def decorator(func: F) -> F:
+            self._check_handler(func)
+            self._error_handlers.append((tuple(exceptions), func))
+            logger.debug(
+                "Зарегистрирован обработчик ошибок %s",
+                getattr(func, "__name__", "handler"),
+            )
+            return func
+
+        self._ensure_not_running()
+        return decorator
+
     def _register(
         self,
         event: Event,
         filter_: Any,
         wrap: Callable[[Callable[..., Any]], CoroHandler],
+        *,
+        state: str | None = None,
     ) -> Callable[[F], F]:
         """Общий код регистрации обработчика в диспетчере ``maxapi``."""
         self._ensure_not_running()
 
         def decorator(func: F) -> F:
-            self._ensure_not_running()
-            if inspect.iscoroutinefunction(func):
-                message = (
-                    f"Обработчик {getattr(func, '__name__', '')} объявлен "
-                    "через async def, а MaxApiLib вызывает обычные функции. "
-                    "Уберите async и await: вся асинхронность внутри "
-                    "библиотеки."
-                )
-                raise MaxApiLibError(message)
+            self._check_handler(func)
             wrapper = wrap(func)
-            if filter_ is None:
-                event()(wrapper)
-            else:
-                event(filter_)(wrapper)
+            filters: list[Any] = []
+            if filter_ is not None:
+                filters.append(filter_)
+            if state is not None:
+                filters.append(StateFilter(state))
+            event(*filters)(wrapper)
             logger.debug(
                 "Зарегистрирован обработчик %s",
                 getattr(func, "__name__", "handler"),
@@ -352,6 +498,23 @@ class Bot:
             message = (
                 "Нельзя добавлять обработчики после запуска бота: "
                 "перенесите декораторы выше вызова bot.run()."
+            )
+            raise MaxApiLibError(message)
+
+    def _check_handler(self, func: Callable[..., Any]) -> None:
+        """Проверить обработчик перед регистрацией.
+
+        Raises:
+            MaxApiLibError: Если бот уже запущен или функция асинхронная.
+        """
+        self._ensure_not_running()
+
+        if inspect.iscoroutinefunction(func):
+            name = getattr(func, "__name__", "обработчик")
+            message = (
+                f"Обработчик {name} объявлен через async def, а MaxApiLib "
+                "вызывает обычные функции. Уберите async и await: "
+                "вся асинхронность внутри библиотеки."
             )
             raise MaxApiLibError(message)
 
@@ -390,12 +553,81 @@ class Bot:
         Пользовательский код может блокироваться (например, ``time.sleep``)
         и вызывать ``bot.send()``: выполнение идёт в рабочем потоке, поэтому
         цикл событий продолжает обслуживать сетевые запросы.
+
+        Ошибка в обработчике не роняет бота: она попадает в лог, в счётчики
+        и в обработчики :meth:`on_error`.
         """
         token = self._context.set(view)
         try:
             await asyncio.to_thread(func, view)
+        except Exception as exc:
+            await self._report_error(exc, view, traceback.format_exc())
         finally:
             self._context.reset(token)
+
+    async def _report_error(
+        self, exc: BaseException, view: EventView, traceback_text: str
+    ) -> None:
+        """Залогировать ошибку обработчика и сообщить о ней."""
+        self.stats.count_error(exc)
+        logger.error(
+            "Ошибка в обработчике (%s): %s: %s\n%s",
+            self._describe_view(view),
+            type(exc).__name__,
+            exc,
+            traceback_text,
+        )
+
+        error = Error(
+            exception=exc,
+            traceback=traceback_text,
+            event=view,
+            bot=self,
+        )
+
+        if self._error_handlers:
+            await asyncio.to_thread(self._call_error_handlers, error)
+
+        if self._admin_id is not None:
+            with contextlib.suppress(Exception):
+                await self._client.send_message(
+                    text=self._error_message(error), user_id=self._admin_id
+                )
+
+    def _call_error_handlers(self, error: Error) -> None:
+        """Вызвать обработчики ошибок (в рабочем потоке)."""
+        for exceptions, func in self._error_handlers:
+            if exceptions and not isinstance(error.exception, exceptions):
+                continue
+            try:
+                func(error)
+            except Exception:  # обработчик ошибок не должен ломать бота
+                logger.exception(
+                    "Ошибка в обработчике on_error %s",
+                    getattr(func, "__name__", "handler"),
+                )
+
+    def _error_message(self, error: Error) -> str:
+        """Текст сообщения об ошибке для админа (``admin_id``)."""
+        text = f"⚠️ Ошибка в боте: {error.text}"
+        if error.event is not None:
+            text = f"{text}\nСобытие: {self._describe_view(error.event)}"
+        return text[:MAX_TEXT_LENGTH]
+
+    @staticmethod
+    def _describe_view(view: EventView) -> str:
+        """Короткое описание события из обработчика."""
+        if isinstance(view, Message):
+            return (
+                f"сообщение от {view.user_id} в чат {view.chat_id}: "
+                f"{view.text!r}"
+            )
+        if isinstance(view, Callback):
+            return (
+                f"нажатие кнопки {view.payload!r}"
+                f" (пользователь {view.user_id}, чат {view.chat_id})"
+            )
+        return f"запуск бота пользователем {view.user_id} (чат {view.chat_id})"
 
     # ------------------------------------------------------------------
     # Отправка сообщений (синхронные методы)
@@ -443,6 +675,12 @@ class Bot:
                 disable_link_preview=disable_link_preview,
             )
         )
+        self.stats.count_sent()
+        logger.info(
+            "→ %s: %r",
+            self._describe_target(chat_id, user_id),
+            (text or "[вложения]")[:MAX_TEXT_LENGTH],
+        )
 
     def reply(
         self,
@@ -473,6 +711,12 @@ class Bot:
                 notify=notify,
                 disable_link_preview=disable_link_preview,
             )
+        )
+        self.stats.count_sent()
+        logger.info(
+            "→ ответ в чат %s: %r",
+            raw.recipient.chat_id,
+            (text or "[вложения]")[:MAX_TEXT_LENGTH],
         )
 
     def answer_callback(
@@ -506,6 +750,15 @@ class Bot:
                 notification=notification,
             )
         )
+        self.stats.count_answer()
+        logger.debug("→ ответ на нажатие кнопки %s отправлен", callback_id)
+
+    @staticmethod
+    def _describe_target(chat_id: int | None, user_id: int | None) -> str:
+        """Описание получателя для лога."""
+        if chat_id is not None:
+            return f"отправлено в чат {chat_id}"
+        return f"отправлено пользователю {user_id}"
 
     def _target_from_context(self) -> tuple[int | None, int | None]:
         """Определить получателя по событию, которое сейчас обрабатывается."""
@@ -513,6 +766,128 @@ class Bot:
         if view is None:
             return None, None
         return view.chat_id, view.user_id
+
+    # ------------------------------------------------------------------
+    # Состояния и данные (FSM)
+    # ------------------------------------------------------------------
+
+    def set_state(
+        self,
+        target: EventView | str,
+        state: str | None = None,
+        *,
+        chat_id: int | None = None,
+        user_id: int | None = None,
+    ) -> None:
+        """Запомнить состояние пользователя.
+
+        Два способа вызова::
+
+            bot.set_state(message, "waiting_name")       # из обработчика
+            bot.set_state("waiting_name", chat_id=42)    # по ID чата
+
+        ``state=None`` — сбросить состояние (то же делает
+        :meth:`reset_state`).
+        """
+        if isinstance(target, str):
+            state = target
+            ids = target_ids(None, chat_id=chat_id, user_id=user_id)
+        else:
+            ids = target_ids(target)
+
+        self._submit(
+            self._states.set_state(
+                chat_id=ids[0], user_id=ids[1], state=state
+            )
+        )
+        logger.debug(
+            "Состояние чата %s / пользователя %s: %r", ids[0], ids[1], state
+        )
+
+    def get_state(
+        self,
+        target: EventView | None = None,
+        *,
+        chat_id: int | None = None,
+        user_id: int | None = None,
+    ) -> str | None:
+        """Текущее состояние пользователя или ``None``.
+
+        Example::
+
+            if bot.get_state(message) == "waiting_name":
+                ...
+        """
+        ids = target_ids(target, chat_id=chat_id, user_id=user_id)
+        return self._submit(
+            self._states.get_state(chat_id=ids[0], user_id=ids[1])
+        )
+
+    def set_data(
+        self,
+        target: EventView | None = None,
+        *,
+        chat_id: int | None = None,
+        user_id: int | None = None,
+        **values: Any,
+    ) -> dict[str, Any]:
+        """Сохранить данные пользователя.
+
+        Example::
+
+            bot.set_data(message, name="Иван", city="Москва")
+            bot.get_data(message)          # {'name': 'Иван', 'city': 'Москва'}
+            bot.get_data(message, "name")  # 'Иван'
+
+        Returns:
+            Все данные пользователя после сохранения.
+        """
+        ids = target_ids(target, chat_id=chat_id, user_id=user_id)
+        return self._submit(
+            self._states.set_data(
+                chat_id=ids[0], user_id=ids[1], **values
+            )
+        )
+
+    def get_data(
+        self,
+        target: EventView | None = None,
+        key: str | None = None,
+        *,
+        chat_id: int | None = None,
+        user_id: int | None = None,
+    ) -> Any:
+        """Данные пользователя: весь словарь или одно значение по ключу.
+
+        Example::
+
+            bot.get_data(message)          # {'name': 'Иван'}
+            bot.get_data(message, "name")  # 'Иван'
+        """
+        ids = target_ids(target, chat_id=chat_id, user_id=user_id)
+        return self._submit(
+            self._states.get_data(
+                chat_id=ids[0], user_id=ids[1], key=key
+            )
+        )
+
+    def reset_state(
+        self,
+        target: EventView | None = None,
+        *,
+        chat_id: int | None = None,
+        user_id: int | None = None,
+    ) -> None:
+        """Забыть состояние и данные пользователя (выйти из анкеты)."""
+        ids = target_ids(target, chat_id=chat_id, user_id=user_id)
+        self._submit(
+            self._states.reset(chat_id=ids[0], user_id=ids[1])
+        )
+        logger.debug(
+            "Состояние и данные чата %s / пользователя %s очищены",
+            ids[0],
+            ids[1],
+        )
 
     # ------------------------------------------------------------------
     # Запуск и остановка
@@ -531,17 +906,119 @@ class Bot:
             MaxApiLibError: Если при запуске произошла ошибка
                 (например, :class:`MaxApiLibAuthError` из-за неверного токена).
         """
+        self._launch(blocking=blocking, webhook=None)
+
+    def run_webhook(
+        self,
+        url: str,
+        *,
+        host: str = DEFAULT_HOST,
+        port: int = DEFAULT_PORT,
+        secret: str | None = None,
+        subscribe: bool = True,
+        blocking: bool = True,
+    ) -> None:
+        """Запустить бота на вебхуке.
+
+        Этот способ рекомендует MAX для продакшена: события приходят
+        на ваш HTTPS-адрес сразу, без опроса API.
+
+        Args:
+            url: Публичный адрес, по которому MAX будет присылать события,
+                например ``"https://bot.example.com/hook"``.
+            host: На каком интерфейсе слушать (по умолчанию все).
+            port: Порт сервера (по умолчанию 8080; ``0`` — любой свободный).
+            secret: Секрет, по которому библиотека проверяет, что запрос
+                пришёл от MAX. Если не указан, а ``subscribe=True`` —
+                придумывается автоматически.
+            subscribe: Подписать бота на события (``False`` — если подписка
+                уже настроена или для проверки на своём компьютере).
+            blocking: ``True`` (по умолчанию) — блокирует поток до Ctrl+C;
+                ``False`` — работает в фоне.
+
+        Example::
+
+            bot.run_webhook("https://bot.example.com/hook")
+
+        В режиме вебхука доступны адреса для мониторинга:
+        ``GET /health`` и ``GET /stats``.
+        """
+        self._launch(
+            blocking=blocking,
+            webhook=(url, host, port, secret, subscribe),
+        )
+
+    def delete_webhook(self) -> None:
+        """Удалить подписки на вебхук.
+
+        Нужно, если бот раньше работал через вебхук, а теперь должен
+        отвечать через long polling: пока подписка есть, MAX события
+        в поллинг не отдаёт.
+        """
+        self._submit(self.maxapi.delete_webhook())
+        logger.info(
+            "Подписки на вебхук удалены: бот снова может работать "
+            "на long polling"
+        )
+
+    def webhooks(self) -> list[str]:
+        """Адреса вебхуков, на которые сейчас подписан бот.
+
+        Если список не пустой, а бот запущен через :meth:`run`,
+        события в поллинг не придут — нужен :meth:`delete_webhook`.
+        """
+        subscriptions = self._submit(self.maxapi.get_subscriptions())
+        return [item.url for item in subscriptions.subscriptions]
+
+    def _launch(
+        self,
+        *,
+        blocking: bool,
+        webhook: tuple[str, str, int, str | None, bool] | None,
+    ) -> None:
+        """Общий запуск для :meth:`run` и :meth:`run_webhook`."""
         if self.is_running:
-            message = "Бот уже запущен: повторный вызов bot.run() не нужен."
+            message = "Бот уже запущен: повторный вызов не нужен."
             raise MaxApiLibError(message)
+
+        if webhook is None:
+            self._webhook_url = None
+            self._webhook_secret = None
+            self._webhook_port = None
+        else:
+            url, host, port, secret, subscribe = webhook
+            self._webhook_url = url
+            self._webhook_host = host
+            self._webhook_requested_port = port
+            self._webhook_subscribe = subscribe
+            if secret is not None:
+                self._webhook_secret = secret
+            elif subscribe:
+                # Секрет нужен MAX, чтобы бот принимал только «свои»
+                # запросы: придумываем его за пользователя.
+                self._webhook_secret = generate_secret()
+            else:
+                self._webhook_secret = None
 
         self._fatal = None
         self._stop_requested.clear()
+        self.stats.mark_started(reset=True)
         self._thread = threading.Thread(
             target=self._run_loop, name="maxapilib-bot", daemon=True
         )
         self._thread.start()
-        logger.info("Бот запускается. Для остановки нажмите Ctrl+C.")
+
+        if self._webhook_url is None:
+            logger.info(
+                "Бот запускается на long polling. "
+                "Для остановки нажмите Ctrl+C."
+            )
+        else:
+            logger.info(
+                "Бот запускается на вебхуке %s. "
+                "Для остановки нажмите Ctrl+C.",
+                self._webhook_url,
+            )
 
         if not blocking:
             return
@@ -596,11 +1073,12 @@ class Bot:
 
         thread.join(timeout)
         if thread.is_alive():
-            logger.warning("Поллинг не остановился за %.1f c", timeout)
+            logger.warning("Бот не остановился за %.1f c", timeout)
             return
 
         self._thread = None
-        logger.info("Бот остановлен")
+        self.stats.mark_stopped()
+        logger.info("Бот остановлен. %s", self.stats)
 
     # ------------------------------------------------------------------
     # Служебные методы
@@ -634,6 +1112,67 @@ class Bot:
             self._stop_event = None
 
     async def _serve(self) -> None:
+        """Работа бота до остановки: поллинг или вебхук."""
+        if self._webhook_url is None:
+            await self._serve_polling()
+        else:
+            await self._serve_webhook()
+
+    async def _serve_webhook(self) -> None:
+        """Поднять сервер вебхука и работать до остановки бота."""
+        stop_event = self._stop_event
+        url = self._webhook_url
+        if stop_event is None or url is None:  # pragma: no cover - гонка
+            return
+
+        server = WebhookServer(
+            dispatcher=self.dispatcher,
+            bot=self.maxapi,
+            url=url,
+            host=self._webhook_host,
+            port=self._webhook_requested_port,
+            secret=self._webhook_secret,
+            stats=self.stats,
+        )
+        await server.start()
+        self._webhook_server = server
+        self._webhook_port = server.bound_port
+        logger.info("Вебхук: %s", server.describe())
+
+        if self._webhook_subscribe:
+            await self._subscribe_webhook(url)
+
+        try:
+            await stop_event.wait()
+        finally:
+            await server.stop()
+            self._webhook_server = None
+            self._webhook_port = None
+            logger.info("Сервер вебхука остановлен")
+
+    async def _subscribe_webhook(self, url: str) -> None:
+        """Подписать бота на события через вебхук."""
+        try:
+            result = await self.maxapi.subscribe_webhook(
+                url=url, secret=self._webhook_secret
+            )
+        except Exception as exc:
+            logger.error("Не удалось подписаться на вебхук %s: %s", url, exc)
+            logger.error(
+                "Проверьте, что MAX может открыть этот адрес по HTTPS. "
+                "Если подписка уже настроена, запускайте так: "
+                "bot.run_webhook(url, subscribe=False)."
+            )
+            return
+
+        if result.success:
+            logger.info("Подписка на вебхук оформлена: %s", url)
+        else:
+            logger.error(
+                "MAX отказал в подписке на %s: %s", url, result.message
+            )
+
+    async def _serve_polling(self) -> None:
         """Поллинг до остановки бота."""
         stop_event = self._stop_event
         if stop_event is None:  # pragma: no cover - защита от гонок
@@ -665,21 +1204,26 @@ class Bot:
             raise error
 
     def _submit(self, coro: Coroutine[Any, Any, T]) -> T:
-        """Выполнить корутину в цикле поллинга и дождаться результата.
+        """Выполнить корутину и дождаться результата.
+
+        Если бот запущен, работа идёт в его цикле событий. В ином случае
+        (например, ``bot.send`` для разового уведомления) корутина
+        выполняется в отдельном временном цикле.
 
         Raises:
-            MaxApiLibError: Если бот не запущен или вызов идёт из самого
-                цикла событий.
+            MaxApiLibError: Если метод вызван из асинхронного кода.
             MaxApiLibTimeoutError: Если ответа нет дольше ``call_timeout``.
         """
         loop = self._loop
         if loop is None or not loop.is_running():
-            coro.close()
-            message = (
-                "Бот не запущен: вызовите bot.run() (или run(blocking=False)) "
-                "перед отправкой сообщений."
-            )
-            raise MaxApiLibError(message)
+            if _running_loop() is not None:
+                coro.close()
+                message = (
+                    "Синхронные методы нельзя вызывать из асинхронного "
+                    "кода: используйте обычные функции-обработчики."
+                )
+                raise MaxApiLibError(message)
+            return self._run_standalone(coro)
 
         if _running_loop() is loop:
             coro.close()
@@ -706,6 +1250,28 @@ class Bot:
             raise MaxApiLibTimeoutError(
                 message, details={"timeout": self._call_timeout}
             ) from exc
+
+    def _run_standalone(self, coro: Coroutine[Any, Any, T]) -> T:
+        """Выполнить корутину в отдельном цикле событий (бот не запущен)."""
+
+        async def runner() -> T:
+            try:
+                return await asyncio.wait_for(coro, self._call_timeout)
+            except asyncio.TimeoutError as exc:
+                message = (
+                    f"MAX API не ответил за {self._call_timeout:g} c. "
+                    "Увеличьте call_timeout, если сеть медленная."
+                )
+                raise MaxApiLibTimeoutError(
+                    message, details={"timeout": self._call_timeout}
+                ) from exc
+            finally:
+                # Сессия aiohttp привязана к циклу: закрываем её, чтобы
+                # следующий разовый вызов начал с чистой сессии.
+                with contextlib.suppress(Exception):
+                    await self.maxapi.close_session()
+
+        return asyncio.run(runner())
 
 
 def _rename(handler: CoroHandler, source: Callable[..., Any]) -> None:

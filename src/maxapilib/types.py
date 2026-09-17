@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 __all__ = [
     "Button",
     "Callback",
+    "Error",
     "Message",
     "Started",
     "TextBox",
@@ -589,6 +590,31 @@ class Started:
             disable_link_preview=disable_link_preview,
             format=format,
         )
+
+
+@dataclass(slots=True)
+class Error:
+    """Ошибка, случившаяся в обработчике (приходит в :meth:`maxapilib.Bot.on_error`).
+
+    Attributes:
+        exception: Исходное исключение.
+        traceback: Полный текст ошибки со стеком вызовов.
+        event: Событие, при обработке которого упало (может быть ``None``).
+        bot: Бот, в котором произошла ошибка.
+    """
+
+    exception: BaseException
+    traceback: str
+    event: Message | Callback | Started | None
+    bot: Bot = field(repr=False)
+
+    @property
+    def text(self) -> str:
+        """Короткое описание ошибки одной строкой."""
+        return f"{type(self.exception).__name__}: {self.exception}"
+
+    def __str__(self) -> str:
+        return self.text
 
 
 def text_of(message: MaxApiMessage | None) -> str | None:

@@ -10,7 +10,15 @@ import pytest
 from maxapi.connection import base as conn_base
 from maxapi.utils.runtime import bind_bot
 
-from .helpers import FakeTransport
+from .helpers import TOKEN, FakeTransport
+
+
+@pytest.fixture
+def bot(transport: FakeTransport) -> Any:
+    """Готовый бот с подменённым HTTP-слоем."""
+    from maxapilib import Bot
+
+    return Bot(TOKEN)
 
 
 @pytest.fixture

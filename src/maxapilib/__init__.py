@@ -2,6 +2,8 @@
 
 Библиотека прячет асинхронность ``maxapi``: обработчики — обычные функции,
 отправка сообщений — обычные вызовы без ``async`` и ``await``.
+Возможности: команды и кнопки, состояния (FSM), вебхуки, логи и счётчики
+для мониторинга.
 
 Пример::
 
@@ -35,7 +37,8 @@ from .exceptions import (
     MaxApiLibNetworkError,
     MaxApiLibTimeoutError,
 )
-from .logs import enable_logging
+from .logs import close_log_files, enable_logging
+from .monitoring import Stats
 from .time_utils import (
     Timer,
     every,
@@ -45,14 +48,15 @@ from .time_utils import (
     parse_time,
     sleep,
 )
-from .types import Button, Callback, Message, Started, TextBox
+from .types import Button, Callback, Error, Message, Started, TextBox
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
     "Bot",
     "Button",
     "Callback",
+    "Error",
     "MaxApiClient",
     "MaxApiLibAPIError",
     "MaxApiLibAuthError",
@@ -61,10 +65,12 @@ __all__ = [
     "MaxApiLibTimeoutError",
     "Message",
     "Started",
+    "Stats",
     "TextBox",
     "Timer",
     "__version__",
     "as_format",
+    "close_log_files",
     "enable_logging",
     "every",
     "humanize_delay",

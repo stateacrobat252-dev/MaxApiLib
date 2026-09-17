@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "MaxApiLib"
-version = "1.0.0"
-description = "MaxApiLib — простые боты для мессенджера MAX: синхронная обёртка над maxapi без async, await и вложений"
+version = "1.1.0"
+description = "MaxApiLib — простые боты для мессенджера MAX: синхронная обёртка над maxapi без async и await — команды, кнопки, состояния, вебхуки, логи и мониторинг"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -28,6 +28,9 @@ classifiers = [
 dependencies = ["maxapi>=1.2,<2"]
 
 [project.optional-dependencies]
+# Вебхуки работают на aiohttp — он и так приходит вместе с maxapi,
+# extra нужен только если ставить библиотеку в нестандартном окружении.
+webhook = ["aiohttp>=3.9,<4"]
 dev = [
     "mypy>=1.11",
     "pytest>=7.4",

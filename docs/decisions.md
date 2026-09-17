@@ -2,6 +2,20 @@
 
 This file contains all architectural decisions made during the development of `MaxApiLib`.
 
+## Decisions (1.1)
+- [x] FSM строится на контекстах `maxapi` (`Dispatcher.fsm`, `MemoryContext`/`RedisContext`), а не на своём хранилище: один источник правды, смена хранилища одним аргументом `Bot(storage=...)`.
+- [x] Состояние — обычная строка (`"waiting_name"`), а не класс `StatesGroup`: для новичка это одна понятная строка, а `maxapi.StateFilter` умеет её сравнивать. Сложные состояния остаются доступны через `bot.maxapi`/`bot.dispatcher`.
+- [x] Состояние задаётся и читается методами `bot.*` с событием первым аргументом (`bot.set_state(message, "...")`); для вызовов вне обработчика тот же метод принимает `chat_id`/`user_id` — без второго API.
+- [x] Фильтр состояния — параметр `state=` у любого обработчика плюс шорткат `@bot.on_state(...)`: одна фраза «в этом состоянии» вместо отдельной подсистемы.
+- [x] Вебхук поднимает **своё** aiohttp-приложение (`AiohttpMaxWebhook.setup`), а не `Dispatcher.handle_webhook`: нужны дополнительные маршруты `/health` и `/stats` для мониторинга.
+- [x] При `subscribe=True` секрет вебхука генерируется автоматически (`token_hex`, только допустимые MAX символы): безопасно по умолчанию и без лишних вопросов у новичка.
+- [x] Подписка и запуск сервера разведены: `subscribe=False` позволяет поднять сервер локально или когда подписка уже настроена; ошибка подписки логируется и не роняет сервер.
+- [x] Порт `0` разрешён, а фактический порт доступен как `bot.webhook_port` — это нужно и тестам, и запуску за прокси.
+- [x] Мониторинг — middleware диспетчера, а не счётчики внутри обработчиков: так учитываются все события, включая те, под которые не нашлось обработчика.
+- [x] Ошибки обработчиков ловит сам `Bot` (вместо `error_handlers` из `maxapi`): получается простой объект `Error` с `text`/`traceback`/`event`, счётчики и уведомление админа в одном месте.
+- [x] Логи включены по умолчанию на INFO: главная проблема новичка — «бот молчит», а лог сразу показывает, дошло ли событие и что бот отправил. `log_level=None` отключает настройку.
+- [x] `bot.send()` работает и без запущенного бота (отдельный цикл событий с закрытием aiohttp-сессии): разовое уведомление не требует поднимать поллинг.
+
 ## Decisions (1.0)
 - [x] Rewrite the wrapper against the real MAX Bot API contract (`maxapi` 1.2) instead of patching 0.1: polling, sending and keyboards were broken end to end.
 - [x] Rename the library to `MaxApiLib` (distribution name `MaxApiLib`, import name `maxapilib`): the old name described a Telegram-like API, which MAX is not.

@@ -126,10 +126,14 @@ def test_bot_takes_token_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Bot().maxapi.headers["Authorization"] == TOKEN
 
 
-def test_send_before_run_raises() -> None:
+def test_send_without_run_works(transport: FakeTransport) -> None:
+    """Разовое сообщение можно отправить и без запуска бота."""
     bot = Bot(TOKEN)
-    with pytest.raises(MaxApiLibError, match="Бот не запущен"):
-        bot.send("Привет", chat_id=100)
+    bot.send("Привет", chat_id=100)
+
+    assert transport.messages[-1]["params"] == {"chat_id": 100}
+    assert transport.messages[-1]["json"]["text"] == "Привет"
+    assert not bot.is_running
 
 
 def test_wait_without_run_raises() -> None:
@@ -156,11 +160,15 @@ def test_send_rejects_empty_text() -> None:
         bot.send("   ", chat_id=100)
 
 
-def test_reply_outside_run_raises() -> None:
+def test_reply_without_run_works(transport: FakeTransport) -> None:
     bot = Bot(TOKEN)
     update: Any = UpdateUnionAdapter.validate_python(message_created("привет"))
-    with pytest.raises(MaxApiLibError, match="Бот не запущен"):
-        bot.reply(update.message, "ответ")
+    bot.reply(update.message, "ответ")
+
+    assert transport.messages[-1]["json"]["link"] == {
+        "type": "reply",
+        "mid": "mid.1",
+    }
 
 
 def test_format_validation() -> None:
