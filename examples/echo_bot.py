@@ -1,39 +1,62 @@
-import os
+"""Эхо-бот на MaxApiLib: минимальный рабочий пример.
 
-from maxbot_easy import Bot, Button, TextBox
+Перед запуском задайте токен бота в переменной окружения
+``MAX_BOT_TOKEN`` (токен выдаёт @MasterBot в MAX)::
 
-# Замените на ваш настоящий токен
-TOKEN = os.getenv("MAXBOT_TOKEN", "YOUR_TOKEN_HERE")
+    set MAX_BOT_TOKEN=ваш_токен      # Windows
+    export MAX_BOT_TOKEN=ваш_токен   # Linux/macOS
 
-bot = Bot(token=TOKEN)
+Затем запустите файл::
 
-@bot.on_text("/start")
-def start_command():
-    menu = TextBox("Привет! Вот наше меню:")
-    menu.row(
-        Button.callback("Перейти на сайт", "go_to_site"),
-        Button.link("Наши правила", "https://example.com/rules")
+    python examples/echo_bot.py
+"""
+
+from maxapilib import Bot, Button, TextBox, enable_logging
+
+# Bot() возьмёт токен из переменной окружения MAX_BOT_TOKEN.
+# Можно передать явно: Bot("ваш_токен").
+bot = Bot()
+
+
+@bot.on_started()
+def hello(event):
+    """Пользователь нажал «Начать» в профиле бота."""
+    box = TextBox("Привет! Я эхо-бот на MaxApiLib.")
+    box.row(
+        Button.callback("Что я умею", "help"),
+        Button.link("Документация MAX", "https://dev.max.ru/docs-api"),
     )
-    bot.send(menu)
+    event.send(box)
 
-@bot.on_button("go_to_site")
-def handle_site_click():
-    bot.send(TextBox("Вы нажали на кнопку сайта!"))
 
-@bot.on_text(".echo")
-def echo_command(message):
-    text = message.text.replace(".echo", "").strip()
-    if not text:
-        bot.reply(message, TextBox("Напишите что-нибудь после .echo"))
-    else:
-        bot.reply(message, TextBox(f"Вы написали: {text}"))
+@bot.on_command("start", "help")
+def help_command(message):
+    """Команды /start и /help."""
+    message.reply(
+        "Напишите любое сообщение — я повторю его. "
+        "Или нажмите кнопку «Что я умею»."
+    )
 
-@bot.on_message
-def handle_anything(message):
-    # Этот обработчик сработает на все сообщения, которые не были обработаны выше
-    # В нашей реализации декораторы просто регистрируют функции,
-    # а цикл обрабатывает их по порядку.
-    pass
+
+@bot.on_button("help")
+def help_button(callback):
+    """Нажатие inline-кнопки с payload «help»."""
+    callback.answer("Отправляю подсказку")  # убирает «часики» с кнопки
+    callback.send("Умею: /start, /help и повторять любой текст.")
+
+
+@bot.on_text(r"привет|здравствуй")
+def greet(message):
+    """Текст по регулярному выражению."""
+    message.reply("И вам привет!")
+
+
+@bot.on_message()
+def echo(message):
+    """Всё остальное — эхо. Срабатывает, если ничего выше не совпало."""
+    message.reply(f"Вы написали: {message.text}")
+
 
 if __name__ == "__main__":
-    bot.run()
+    enable_logging()  # видно, что происходит: INFO в консоли
+    bot.run()  # блокирует поток до Ctrl+C

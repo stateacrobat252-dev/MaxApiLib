@@ -3,17 +3,17 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "maxbot-easy"
-version = "0.1.0"
-description = "Простые боты для мессенджера MAX: обёртка над maxapi без async, await и вложений"
+name = "MaxApiLib"
+version = "1.0.0"
+description = "MaxApiLib — простые боты для мессенджера MAX: синхронная обёртка над maxapi без async, await и вложений"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "maxbot-easy contributors" }]
+authors = [{ name = "MaxApiLib contributors" }]
 keywords = ["max", "maxapi", "bot", "messenger"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3 :: Only",
@@ -21,6 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Communications :: Chat",
     "Typing :: Typed",
 ]
@@ -35,9 +36,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/maxbot-easy/maxbot-easy"
-Source = "https://github.com/maxbot-easy/maxbot-easy"
-Issues = "https://github.com/maxbot-easy/maxbot-easy/issues"
+Homepage = "https://github.com/stateacrobat252-dev/MaxApiLib"
+Source = "https://github.com/stateacrobat252-dev/MaxApiLib"
+Issues = "https://github.com/stateacrobat252-dev/MaxApiLib/issues"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -47,8 +48,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=maxbot_easy --cov-report=term-missing --cov-fail-under=80"
-filterwarnings = ["ignore::DeprecationWarning:maxapi"]
+addopts = "--cov=maxapilib --cov-report=term-missing --cov-fail-under=80"
 
 [tool.coverage.report]
 exclude_lines = [
