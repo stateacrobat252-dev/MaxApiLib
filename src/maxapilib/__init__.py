@@ -38,7 +38,8 @@ from .exceptions import (
     MaxApiLibTimeoutError,
 )
 from .logs import close_log_files, enable_logging
-from .monitoring import Stats
+from .monitoring import Monitor, Stats, describe_event
+from .states import StateManager
 from .time_utils import (
     Timer,
     every,
@@ -49,14 +50,26 @@ from .time_utils import (
     sleep,
 )
 from .types import Button, Callback, Error, Message, Started, TextBox
+from .webhook import (
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    HEALTH_PATH,
+    STATS_PATH,
+    WebhookServer,
+    generate_secret,
+    webhook_path,
+)
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 __all__ = [
     "Bot",
     "Button",
     "Callback",
+    "DEFAULT_HOST",
+    "DEFAULT_PORT",
     "Error",
+    "HEALTH_PATH",
     "MaxApiClient",
     "MaxApiLibAPIError",
     "MaxApiLibAuthError",
@@ -64,18 +77,25 @@ __all__ = [
     "MaxApiLibNetworkError",
     "MaxApiLibTimeoutError",
     "Message",
+    "Monitor",
+    "STATS_PATH",
     "Started",
     "Stats",
+    "StateManager",
     "TextBox",
     "Timer",
+    "WebhookServer",
     "__version__",
     "as_format",
     "close_log_files",
+    "describe_event",
     "enable_logging",
     "every",
+    "generate_secret",
     "humanize_delay",
     "later",
     "now",
     "parse_time",
     "sleep",
+    "webhook_path",
 ]

@@ -1,34 +1,45 @@
-# Виртуальные окружения
-.venv/
-venv/
-env/
-
-# Кэш Python
+```
+# Python
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
+*.pyd
 *.egg-info/
-.eggs/
+.Python
+env/
+venv/
+.venv/
+.env
+.env.local
+.env.*
+
+# Build artifacts
 build/
 dist/
+*.egg
+*.whl
+*.so
+*.dylib
+*.dll
 
-# Секреты: токен бота никогда не должен попадать в репозиторий
-.env
-.env.*
-*.tok
-
-# Инструменты
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+# Testing
 .coverage
-.coverage.*
+coverage/
 htmlcov/
-coverage.xml
+.noserc
+.pytest_cache/
 
-# Редакторы и ОС
-.idea/
+# IDE
 .vscode/
+.idea/
 *.swp
+*.swo
+*.tmp
+
+# OS
 .DS_Store
 Thumbs.db
-desktop.ini
+
+# Logs
+*.log
+```
